@@ -3,7 +3,7 @@ data
 __pycache__
 path.sh
 exp
-exp*/
+exp*/*.pt
 *.pt
 download
 dask-worker-space
