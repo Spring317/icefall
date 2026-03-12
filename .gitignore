@@ -35,3 +35,7 @@ node_modules
 .DS_Store
 *.fst
 *.arpa
+*.vocab
+*.model
+./egs/librispeech/ASR/bud500_raw_test/
+
