@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-#
-# Copyright 2021-2022 Xiaomi Corporation (Author: Fangjun Kuang,
-#                                                 Zengwei Yao)
+# Copyright    2021-2022  Xiaomi Corp.        (authors: Fangjun Kuang,
+#                                                       Wei Kang,
+#                                                       Mingshuang Luo,)
+#                                                       Zengwei Yao)
 #
 # See ../../../../LICENSE for clarification regarding multiple authors
 #
@@ -16,90 +17,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-Usage:
-(1) greedy search
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method greedy_search
-
-(2) beam search (not recommended)
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method beam_search \
-    --beam-size 4
-
-(3) modified beam search
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method modified_beam_search \
-    --beam-size 4
-
-(4) fast beam search (one best)
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method fast_beam_search \
-    --beam 20.0 \
-    --max-contexts 8 \
-    --max-states 64
-
-(5) fast beam search (nbest)
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method fast_beam_search_nbest \
-    --beam 20.0 \
-    --max-contexts 8 \
-    --max-states 64 \
-    --num-paths 200 \
-    --nbest-scale 0.5
-
-(6) fast beam search (nbest oracle WER)
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method fast_beam_search_nbest_oracle \
-    --beam 20.0 \
-    --max-contexts 8 \
-    --max-states 64 \
-    --num-paths 200 \
-    --nbest-scale 0.5
-
-(7) fast beam search (with LG)
-./pruned_transducer_stateless7_streaming/decode.py \
-    --epoch 28 \
-    --avg 15 \
-    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
-    --max-duration 600 \
-    --decode-chunk-len 32 \
-    --decoding-method fast_beam_search_nbest_LG \
-    --beam 20.0 \
-    --max-contexts 8 \
-    --max-states 64
-"""
-
 
 import argparse
 import logging
@@ -128,6 +45,7 @@ from beam_search import (
     modified_beam_search_LODR,
 )
 from train import add_model_arguments, get_params, get_transducer_model
+from lhotse.cut import CutSet  # Added for direct loading
 
 from icefall import LmScorer, NgramLm
 from icefall.checkpoint import (
@@ -199,17 +117,19 @@ def get_parser():
         help="The experiment dir",
     )
 
+    # UPDATED DEFAULT to bpe.model as requested
     parser.add_argument(
         "--bpe-model",
         type=str,
-        default="data/lang_bpe_500/bpe.model",
+        default="bpe.model",
         help="Path to the BPE model",
     )
 
+    # UPDATED DEFAULT to 4000 based on your previous input
     parser.add_argument(
         "--lang-dir",
         type=Path,
-        default="data/lang_bpe_500",
+        default="data/lang_bpe_4000",
         help="The lang dir containing word table and LG graph",
     )
 
@@ -951,16 +871,35 @@ def main():
 
     # we need cut ids to display recognition results.
     args.return_cuts = True
+    
+    # --- MODIFIED BLOCK FOR BUD500 ---
+    # Manually load the test set instead of using LibriSpeechAsrDataModule
+    logging.info("Loading Bud500 test set directly...")
+    
+    # Initialize basic data module just for its dataloader creation methods
     librispeech = LibriSpeechAsrDataModule(args)
+    
+    try:
+        bud500_test_cuts = CutSet.from_file("data/fbank/bud500_cuts_test.jsonl.gz")
+        logging.info(f"Loaded {len(bud500_test_cuts)} test cuts.")
+        
+        # Apply the same channel fix as in training, just in case
+        def fix_channel_mismatch(c):
+            if c.has_features and c.features.channels != c.channel:
+                c.features.channels = c.channel
+            return c
+        bud500_test_cuts = bud500_test_cuts.map(fix_channel_mismatch)
+        
+        bud500_dl = librispeech.test_dataloaders(bud500_test_cuts)
+        
+        test_sets = ["bud500_test"]
+        test_dl = [bud500_dl]
+        
+    except Exception as e:
+        logging.error(f"Failed to load Bud500 test data: {e}")
+        raise
+    # --------------------------------
 
-    test_clean_cuts = librispeech.test_clean_cuts()
-    test_other_cuts = librispeech.test_other_cuts()
-
-    test_clean_dl = librispeech.test_dataloaders(test_clean_cuts)
-    test_other_dl = librispeech.test_dataloaders(test_other_cuts)
-
-    test_sets = ["test-clean", "test-other"]
-    test_dl = [test_clean_dl, test_other_dl]
     import time
 
     for test_set, test_dl in zip(test_sets, test_dl):

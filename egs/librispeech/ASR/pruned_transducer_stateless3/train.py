@@ -53,7 +53,7 @@ import random
 import warnings
 from pathlib import Path
 from shutil import copyfile
-from typing import Any, Dict, Iterator, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import k2
 import optim
@@ -753,7 +753,7 @@ def train_one_epoch(
     scheduler: LRSchedulerType,
     sp: spm.SentencePieceProcessor,
     train_dl: torch.utils.data.DataLoader,
-    iter_giga: Iterator,
+    giga_train_dl: torch.utils.data.DataLoader,
     valid_dl: torch.utils.data.DataLoader,
     rng: random.Random,
     scaler: "GradScaler",
@@ -806,6 +806,7 @@ def train_one_epoch(
     dl_weights = [1 - params.giga_prob, params.giga_prob]
 
     iter_libri = iter(train_dl)
+    iter_giga = iter(giga_train_dl)
 
     batch_idx = 0
 
@@ -949,9 +950,9 @@ def filter_short_and_long_utterances(
         # an utterance duration distribution for your dataset to select
         # the threshold
         if c.duration < 1.0 or c.duration > 20.0:
-            #  logging.warning(
-            #      f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
-            #  )
+            logging.warning(
+                f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
+            )
             return False
 
         # In pruned RNN-T, we require that T >= S
@@ -964,14 +965,14 @@ def filter_short_and_long_utterances(
         tokens = sp.encode(c.supervisions[0].text, out_type=str)
 
         if T < len(tokens):
-            #  logging.warning(
-            #      f"Exclude cut with ID {c.id} from training. "
-            #      f"Number of frames (before subsampling): {c.num_frames}. "
-            #      f"Number of frames (after subsampling): {T}. "
-            #      f"Text: {c.supervisions[0].text}. "
-            #      f"Tokens: {tokens}. "
-            #      f"Number of tokens: {len(tokens)}"
-            #  )
+            logging.warning(
+                f"Exclude cut with ID {c.id} from training. "
+                f"Number of frames (before subsampling): {c.num_frames}. "
+                f"Number of frames (after subsampling): {T}. "
+                f"Text: {c.supervisions[0].text}. "
+                f"Tokens: {tokens}. "
+                f"Number of tokens: {len(tokens)}"
+            )
             return False
 
         return True
@@ -1116,8 +1117,6 @@ def run(rank, world_size, args):
     # It's time consuming to include `giga_train_dl` here
     #  for dl in [train_dl, giga_train_dl]:
     for dl in [train_dl]:
-        # You can skip scan_pessimistic_batches_for_oom() if you are sure
-        # your selected params won't cause OOM
         if params.start_batch <= 0:
             scan_pessimistic_batches_for_oom(
                 model=model,
@@ -1127,8 +1126,6 @@ def run(rank, world_size, args):
                 params=params,
                 warmup=0.0 if params.start_epoch == 0 else 1.0,
             )
-
-    iter_giga = iter(giga_train_dl)
 
     scaler = create_grad_scaler(enabled=params.use_fp16)
     if checkpoints and "grad_scaler" in checkpoints:
@@ -1152,7 +1149,7 @@ def run(rank, world_size, args):
             scheduler=scheduler,
             sp=sp,
             train_dl=train_dl,
-            iter_giga=iter_giga,
+            giga_train_dl=giga_train_dl,
             valid_dl=valid_dl,
             rng=rng,
             scaler=scaler,

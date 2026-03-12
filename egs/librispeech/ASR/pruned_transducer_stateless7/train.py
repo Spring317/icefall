@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-# Copyright    2021-2023  Xiaomi Corp.        (authors: Fangjun Kuang,
+# Copyright    2021-2022  Xiaomi Corp.        (authors: Fangjun Kuang,
 #                                                       Wei Kang,
-#                                                       Mingshuang Luo,
-#                                                       Zengwei Yao,
-#                                                       Yifan   Yang)
+#                                                       Mingshuang Luo,)
+#                                                       Zengwei Yao)
 #
 # See ../../../../LICENSE for clarification regarding multiple authors
 #
@@ -23,25 +22,24 @@ Usage:
 
 export CUDA_VISIBLE_DEVICES="0,1,2,3"
 
-./pruned_transducer_stateless7/train.py \
+./pruned_transducer_stateless7_streaming/train.py \
   --world-size 4 \
   --num-epochs 30 \
   --start-epoch 1 \
-  --exp-dir pruned_transducer_stateless7/exp \
+  --exp-dir pruned_transducer_stateless7_streaming/exp \
   --full-libri 1 \
   --max-duration 300
 
 # For mix precision training:
 
-./pruned_transducer_stateless7/train.py \
+./pruned_transducer_stateless7_streaming/train.py \
   --world-size 4 \
   --num-epochs 30 \
   --start-epoch 1 \
   --use-fp16 1 \
-  --exp-dir pruned_transducer_stateless7/exp \
+  --exp-dir pruned_transducer_stateless7_streaming/exp \
   --full-libri 1 \
   --max-duration 550
-
 """
 
 
@@ -50,6 +48,7 @@ import copy
 import logging
 import warnings
 from pathlib import Path
+from shutil import copyfile
 from typing import Any, Dict, Optional, Tuple, Union
 
 import k2
@@ -61,7 +60,7 @@ import torch.nn as nn
 from asr_datamodule import LibriSpeechAsrDataModule
 from decoder import Decoder
 from joiner import Joiner
-from lhotse.cut import Cut
+from lhotse.cut import Cut, CutSet
 from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
 from model import Transducer
@@ -86,10 +85,8 @@ from icefall.utils import (
     AttributeDict,
     MetricsTracker,
     create_grad_scaler,
-    filter_uneven_sized_batch,
     setup_logger,
     str2bool,
-    symlink_or_copy,
     torch_autocast,
 )
 
@@ -182,6 +179,29 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         """,
     )
 
+    parser.add_argument(
+        "--short-chunk-size",
+        type=int,
+        default=50,
+        help="""Chunk length of dynamic training, the chunk size would be either
+        max sequence length of current batch or uniformly sampled from (1, short_chunk_size).
+        """,
+    )
+
+    parser.add_argument(
+        "--num-left-chunks",
+        type=int,
+        default=4,
+        help="How many left context can be seen in chunks when calculating attention.",
+    )
+
+    parser.add_argument(
+        "--decode-chunk-len",
+        type=int,
+        default=32,
+        help="The chunk size for decoding (in frames before subsampling)",
+    )
+
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -238,7 +258,7 @@ def get_parser():
     parser.add_argument(
         "--exp-dir",
         type=str,
-        default="pruned_transducer_stateless7/exp",
+        default="pruned_transducer_stateless7_streaming/exp",
         help="""The experiment dir.
         It specifies the directory where all training related
         files, e.g., checkpoints, log, etc, are saved
@@ -429,8 +449,6 @@ def get_params() -> AttributeDict:
     """
     params = AttributeDict(
         {
-            "frame_shift_ms": 10.0,
-            "allowed_excess_duration_ratio": 0.1,
             "best_train_loss": float("inf"),
             "best_valid_loss": float("inf"),
             "best_train_epoch": -1,
@@ -468,6 +486,9 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         feedforward_dim=to_int_tuple(params.feedforward_dims),
         cnn_module_kernels=to_int_tuple(params.cnn_module_kernels),
         num_encoder_layers=to_int_tuple(params.num_encoder_layers),
+        num_left_chunks=params.num_left_chunks,
+        short_chunk_size=params.short_chunk_size,
+        decode_chunk_size=params.decode_chunk_len // 2,
     )
     return encoder
 
@@ -603,8 +624,7 @@ def save_checkpoint(
     """
     if rank != 0:
         return
-    epoch_basename = f"epoch-{params.cur_epoch}.pt"
-    filename = params.exp_dir / epoch_basename
+    filename = params.exp_dir / f"epoch-{params.cur_epoch}.pt"
     save_checkpoint_impl(
         filename=filename,
         model=model,
@@ -618,14 +638,12 @@ def save_checkpoint(
     )
 
     if params.best_train_epoch == params.cur_epoch:
-        symlink_or_copy(
-            exp_dir=params.exp_dir, src=epoch_basename, dst="best-train-loss.pt"
-        )
+        best_train_filename = params.exp_dir / "best-train-loss.pt"
+        copyfile(src=filename, dst=best_train_filename)
 
     if params.best_valid_epoch == params.cur_epoch:
-        symlink_or_copy(
-            exp_dir=params.exp_dir, src=epoch_basename, dst="best-valid-loss.pt"
-        )
+        best_valid_filename = params.exp_dir / "best-valid-loss.pt"
+        copyfile(src=filename, dst=best_valid_filename)
 
 
 def compute_loss(
@@ -653,18 +671,6 @@ def compute_loss(
      warmup: a floating point value which increases throughout training;
         values >= 1.0 are fully warmed up and have all modules present.
     """
-    # For the uneven-sized batch, the total duration after padding would possibly
-    # cause OOM. Hence, for each batch, which is sorted in descending order by length,
-    # we simply drop the last few shortest samples, so that the retained total frames
-    # (after padding) would not exceed `allowed_max_frames`:
-    # `allowed_max_frames = int(max_frames * (1.0 + allowed_excess_duration_ratio))`,
-    # where `max_frames = max_duration * 1000 // frame_shift_ms`.
-    # We set allowed_excess_duration_ratio=0.1.
-    max_frames = params.max_duration * 1000 // params.frame_shift_ms
-    allowed_max_frames = int(max_frames * (1.0 + params.allowed_excess_duration_ratio))
-    if is_training:
-        batch = filter_uneven_sized_batch(batch, allowed_max_frames)
-
     device = model.device if isinstance(model, DDP) else next(model.parameters()).device
     feature = batch["inputs"]
     # at entry, feature is (N, T, C)
@@ -1037,12 +1043,25 @@ def run(rank, world_size, args):
 
     librispeech = LibriSpeechAsrDataModule(args)
 
-    if params.mini_libri:
-        train_cuts = librispeech.train_clean_5_cuts()
-    elif params.full_libri:
-        train_cuts = librispeech.train_all_shuf_cuts()
-    else:
-        train_cuts = librispeech.train_clean_100_cuts()
+    assert not (
+        params.mini_libri and params.full_libri
+    ), f"Cannot set both mini-libri and full-libri flags to True, now mini-libri {params.mini_libri} and full-libri {params.full_libri}"
+
+    # --- MODIFIED: Directly load Bud500 cuts instead of using LibriSpeech module logic ---
+    logging.info("Loading Bud500 cuts directly...")
+    
+    try:
+        train_cuts = CutSet.from_file("data/fbank/bud500_cuts_train.jsonl.gz")
+        logging.info(f"Loaded train cuts: {len(train_cuts)}")
+        
+        valid_cuts = CutSet.from_file("data/fbank/bud500_cuts_dev.jsonl.gz")
+        logging.info(f"Loaded dev cuts: {len(valid_cuts)}")
+    except Exception as e:
+        logging.error(f"Failed to load Bud500 cuts: {e}")
+        logging.error("Ensure local/prepare_bud500.py has been run successfully.")
+        raise
+    
+    # -----------------------------------------------------------------------------------
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
@@ -1054,6 +1073,9 @@ def run(rank, world_size, args):
         # an utterance duration distribution for your dataset to select
         # the threshold
         if c.duration < 1.0 or c.duration > 20.0:
+            logging.warning(
+                f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
+            )
             return False
 
         # In pruned RNN-T, we require that T >= S
@@ -1078,7 +1100,7 @@ def run(rank, world_size, args):
 
         return True
 
-    train_cuts = train_cuts.filter(remove_short_and_long_utt)
+    # train_cuts = train_cuts.filter(remove_short_and_long_utt)
 
     if params.start_batch > 0 and checkpoints and "sampler" in checkpoints:
         # We only load the sampler's state dict when it loads a checkpoint
@@ -1091,21 +1113,16 @@ def run(rank, world_size, args):
         train_cuts, sampler_state_dict=sampler_state_dict
     )
 
-    if params.mini_libri:
-        valid_cuts = librispeech.dev_clean_2_cuts()
-    else:
-        valid_cuts = librispeech.dev_clean_cuts()
-        valid_cuts += librispeech.dev_other_cuts()
     valid_dl = librispeech.valid_dataloaders(valid_cuts)
 
-    if not params.print_diagnostics:
-        scan_pessimistic_batches_for_oom(
-            model=model,
-            train_dl=train_dl,
-            optimizer=optimizer,
-            sp=sp,
-            params=params,
-        )
+    # if not params.print_diagnostics:
+    #     scan_pessimistic_batches_for_oom(
+    #         model=model,
+    #         train_dl=train_dl,
+    #         optimizer=optimizer,
+    #         sp=sp,
+    #         params=params,
+    #     )
 
     scaler = create_grad_scaler(enabled=params.use_fp16, init_scale=1.0)
     if checkpoints and "grad_scaler" in checkpoints:
@@ -1238,6 +1255,12 @@ def main():
     LibriSpeechAsrDataModule.add_arguments(parser)
     args = parser.parse_args()
     args.exp_dir = Path(args.exp_dir)
+    
+    # --- MODIFIED: Force disable MUSAN ---
+    # This prevents LibriSpeechAsrDataModule from trying to load musan cuts
+    args.enable_musan = False
+    logging.info("Forced args.enable_musan = False to skip MUSAN loading.")
+    # -------------------------------------
 
     world_size = args.world_size
     assert world_size >= 1

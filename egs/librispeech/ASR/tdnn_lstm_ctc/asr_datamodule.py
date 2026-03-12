@@ -203,7 +203,7 @@ class LibriSpeechAsrDataModule:
         group.add_argument(
             "--enable-musan",
             type=str2bool,
-            default=True,
+            default=False,
             help="When enabled, select noise from MUSAN and mix it"
             "with training dataset. ",
         )

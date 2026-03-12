@@ -5,42 +5,23 @@
 """
 This script exports a transducer model from PyTorch to ONNX.
 
-We use the pre-trained model from
-https://huggingface.co/Zengwei/icefall-asr-librispeech-pruned-transducer-stateless7-streaming-2022-12-29
-as an example to show how to use this file.
+Adapted for Bud500 Custom Model Export.
 
-1. Download the pre-trained model
-
-cd egs/librispeech/ASR
-
-repo_url=https://huggingface.co/Zengwei/icefall-asr-librispeech-pruned-transducer-stateless7-streaming-2022-12-29
-GIT_LFS_SKIP_SMUDGE=1 git clone $repo_url
-repo=$(basename $repo_url)
-
-pushd $repo
-git lfs pull --include "data/lang_bpe_500/bpe.model"
-git lfs pull --include "exp/pretrained.pt"
-cd exp
-ln -s pretrained.pt epoch-99.pt
-popd
-
-2. Export the model to ONNX
+Usage:
 
 ./pruned_transducer_stateless7_streaming/export-onnx.py \
-  --tokens $repo/data/lang_bpe_500/tokens.txt \
-  --use-averaged-model 0 \
-  --epoch 99 \
-  --avg 1 \
+  --tokens data/lang_bpe_4000/word_vocab.txt \
+  --use-averaged-model 1 \
+  --epoch 30 \
+  --avg 10 \
   --decode-chunk-len 32 \
-  --exp-dir $repo/exp/
+  --exp-dir pruned_transducer_stateless7_streaming/exp_bud500/
 
-It will generate the following 3 files in $repo/exp
-
-  - encoder-epoch-99-avg-1.onnx
-  - decoder-epoch-99-avg-1.onnx
-  - joiner-epoch-99-avg-1.onnx
-
-See ./onnx_pretrained.py for how to use the exported models.
+It will generate the following files in exp_bud500/:
+  - encoder-epoch-30-avg-10.onnx
+  - decoder-epoch-30-avg-10.onnx
+  - joiner-epoch-30-avg-10.onnx
+  - (plus int8 quantized versions)
 """
 
 import argparse
@@ -112,20 +93,22 @@ def get_parser():
         "`epoch` are loaded for averaging. ",
     )
 
+    # UPDATED: Point to your specific experiment directory
     parser.add_argument(
         "--exp-dir",
         type=str,
-        default="pruned_transducer_stateless7_streaming/exp",
+        default="pruned_transducer_stateless7_streaming/exp_bud500",
         help="""It specifies the directory where all training related
         files, e.g., checkpoints, log, etc, are saved
         """,
     )
 
+    # UPDATED: Point to your vocab size 4000 word_vocab file
     parser.add_argument(
         "--tokens",
         type=str,
-        default="data/lang_bpe_500/tokens.txt",
-        help="Path to the tokens.txt.",
+        default="data/lang_bpe_4000/word_vocab.txt",
+        help="Path to the tokens.txt or word_vocab.txt.",
     )
 
     parser.add_argument(
