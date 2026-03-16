@@ -56,7 +56,6 @@ def compute_features(audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
 
 class OnnxBase:
     def __init__(self, model_filename: str):
-        # Profiling logic
         self.num_params = ModelProfiler.count_parameters(model_filename)
         
         session_opts = ort.SessionOptions()
@@ -128,7 +127,6 @@ class OnnxJoiner(OnnxBase):
 def main():
     args = get_args()
     
-    # Measure RAM before loading
     mem_start = ModelProfiler.get_mem_usage()
 
     logging.info("Loading models...")
@@ -136,12 +134,10 @@ def main():
     decoder_model = OnnxDecoder(args.decoder)
     joiner_model = OnnxJoiner(args.joiner)
     
-    # Measure RAM after loading
     mem_after_load = ModelProfiler.get_mem_usage()
     
     total_params = encoder_model.num_params + decoder_model.num_params + joiner_model.num_params
     
-    # PRINT PROFILING REPORT
     logging.info("="*50)
     logging.info(f"PROFILING REPORT:")
     logging.info(f"Total Parameters: {total_params / 1e6:.2f} M")
@@ -219,9 +215,20 @@ def main():
             
             logging.info(f"Timing - RTF: {cut_inference_time / cut.duration:.2f} | Current RAM: {ModelProfiler.get_mem_usage():.2f} MB")
 
-            text = sp.decode(hyp_tokens)
+            # --- CHANGES MADE HERE ---
+            # Using decode_ids() instead of decode() to prevent SentencePiece typing errors
+            text = sp.decode_ids(hyp_tokens) 
             ref_text = cut.supervisions[0].text if cut.supervisions else ""
+            
+            # Print statement that won't get lost in standard logger outputs
+            print(f"\n{'='*60}")
+            print(f"🎯 CUT ID: {cut.id}")
+            print(f"✅ PRED:   {text}")
+            print(f"📝 REF:    {ref_text}")
+            print(f"{'='*60}\n")
+            
             logging.info(f"Ref: {ref_text} | Hyp: {text}")
+            # --------------------------
             
             if ref_text:
                 all_refs.append(ref_text)
