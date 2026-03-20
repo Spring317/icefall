@@ -4,13 +4,15 @@ import soundfile as sf
 from datasets import load_dataset
 
 def main():
-    # 1. Load the Parquet dataset
+    # 1. Load the Parquet dataset safely
     print("Downloading and loading the Bud500 test dataset...")
-    test_url = "https://huggingface.co/datasets/linhtran92/viet_bud500/resolve/main/data/test-00000-of-00002-531c1d81edb57297.parquet"
-    data_files = {"test": test_url}
     
-    # We load just the test split based on your URL
-    dataset = load_dataset("parquet", data_files=data_files)
+    # Using data_files with a wildcard guarantees we ONLY touch the test shards.
+    # This prevents any accidental downloading of the massive 100GB training set.
+    dataset = load_dataset(
+        "linhtran92/viet_bud500", 
+        data_files={"test": "data/test-*.parquet"}
+    )
     test_data = dataset["test"]
 
     # 2. Setup Output Directory
@@ -29,7 +31,7 @@ def main():
             audio_data = item["audio"]
             
             # Extract text (handling potential variations in column names)
-            text = item.get("text", item.get("sentence", ""))
+            text = item.get("transcription", item.get("sentence", ""))
             
             # Generate a clean ID for the file
             utt_id = f"bud500_test_{i:06d}"

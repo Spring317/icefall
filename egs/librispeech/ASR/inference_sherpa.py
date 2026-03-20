@@ -2,10 +2,11 @@ import argparse
 import logging
 import os
 import time
+import json
 
 import numpy as np
 import sherpa_onnx
-from lhotse import CutSet
+import soundfile as sf
 import jiwer
 
 # Configure logging
@@ -16,13 +17,13 @@ logging.basicConfig(
 )
 
 def get_args():
-    parser = argparse.ArgumentParser(description="Evaluate streaming Zipformer with sherpa-onnx on Lhotse cuts")
+    parser = argparse.ArgumentParser(description="Evaluate streaming Zipformer with sherpa-onnx natively (with padding fix)")
     parser.add_argument("--encoder", type=str, required=True, help="Path to encoder.onnx")
     parser.add_argument("--decoder", type=str, required=True, help="Path to decoder.onnx")
     parser.add_argument("--joiner", type=str, required=True, help="Path to joiner.onnx")
     parser.add_argument("--tokens", type=str, required=True, help="Path to tokens.txt")
-    parser.add_argument("--cuts", type=str, required=True, help="Path to cuts jsonl.gz")
-    parser.add_argument("--max-samples", type=int, default=None, help="Limit samples")
+    parser.add_argument("--manifest", type=str, required=True, help="Path to transcripts.jsonl")
+    parser.add_argument("--max-samples", type=int, default=None, help="Limit samples to process")
     parser.add_argument("--decoding-method", type=str, default="greedy_search", choices=["greedy_search", "modified_beam_search"])
     parser.add_argument("--num-threads", type=int, default=1)
     return parser.parse_args()
@@ -31,12 +32,11 @@ def main():
     args = get_args()
     
     # Validation
-    for p in [args.encoder, args.decoder, args.joiner, args.tokens]:
+    for p in [args.encoder, args.decoder, args.joiner, args.tokens, args.manifest]:
         if not os.path.exists(p):
             raise FileNotFoundError(f"File not found: {p}")
             
     # 1. Initialize Sherpa-ONNX Recognizer
-    # This automatically handles C++ level ONNX states, BPE decoding, and Fbank extraction!
     logging.info("Initializing sherpa-onnx OnlineRecognizer...")
     recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
         encoder=args.encoder,
@@ -50,58 +50,63 @@ def main():
         max_active_paths=4
     )
     
-    # 2. Load Cuts
-    logging.info(f"Loading cuts from {args.cuts}...")
-    try:
-        cuts = CutSet.from_file(args.cuts)
-    except Exception as e:
-        logging.error(f"Failed to load cuts: {e}")
-        return
+    # 2. Load Manifest
+    logging.info(f"Loading metadata from {args.manifest}...")
+    with open(args.manifest, "r", encoding="utf-8") as f:
+        lines = f.readlines()
         
     if args.max_samples:
-        cuts = cuts.subset(first=args.max_samples)
+        lines = lines[:args.max_samples]
         
     logging.info("-" * 60)
-    logging.info(f"Starting Evaluation on {len(cuts)} samples using sherpa-onnx...")
+    logging.info(f"Starting Evaluation on {len(lines)} samples using sherpa-onnx...")
     logging.info("-" * 60)
     
     all_refs = []
     all_hyps = []
     total_time = 0.0
+    total_audio_duration = 0.0
     
-    for i, cut in enumerate(cuts):
-        logging.info(f"Processing cut {i+1}: {cut.id}")
+    # 3. Iterate through JSONL and decode directly from WAVs
+    for i, line in enumerate(lines):
+        meta = json.loads(line)
+        utt_id = meta["id"]
+        audio_path = meta["audio_filepath"]
+        ref_text = meta["text"]
+        
+        logging.info(f"Processing audio {i+1}/{len(lines)}: {utt_id}")
+        
         try:
-            # Load raw audio: sherpa-onnx wants float32 arrays in the [-1.0, 1.0] range
-            # Lhotse provides exactly this natively. No manual fbank needed!
-            audio = cut.load_audio()
-            if audio is None:
-                logging.warning(f"Skipping {cut.id}: No audio found.")
-                continue
-                
-            if audio.ndim > 1:
-                audio = audio[0] # Take the first channel
+            # Load raw audio using soundfile as float32 natively
+            audio, sample_rate = sf.read(audio_path, dtype='float32')
             
-            samples = np.ascontiguousarray(audio, dtype=np.float32)
-            ref_text = cut.supervisions[0].text if cut.supervisions else ""
+            # Ensure mono audio just in case
+            if audio.ndim > 1:
+                audio = audio[:, 0]
+                
+            # --- THE FIX: ADD 0.5 SECONDS OF SILENCE PADDING ---
+            # This flushes the final tokens out of the streaming model
+            tail_padding = np.zeros(int(sample_rate * 0.5), dtype=np.float32)
+            audio = np.concatenate([audio, tail_padding])
+            # ---------------------------------------------------
+                
+            samples = np.ascontiguousarray(audio)
+            
+            # We calculate duration based on the actual processed array (including padding)
+            # so the RTF accurately reflects the compute time spent.
+            audio_dur = len(samples) / sample_rate 
+            total_audio_duration += audio_dur
             
             # --- Inference with Sherpa-ONNX ---
             t0 = time.time()
             
-            # Create a new stream for the utterance
             stream = recognizer.create_stream()
-            
-            # Feed the raw waveform. Sherpa-onnx handles resampling internally if needed.
-            stream.accept_waveform(cut.sampling_rate, samples)
-            
-            # Signal the stream is finished
+            stream.accept_waveform(sample_rate, samples)
             stream.input_finished()
             
-            # Decode the stream chunk by chunk
             while recognizer.is_ready(stream):
                 recognizer.decode_stream(stream)
                 
-            # Get the final text result
             result = recognizer.get_result(stream)
             hyp_text = getattr(result, 'text', str(result))
             
@@ -110,20 +115,21 @@ def main():
             
             logging.info(f"  Ref : {ref_text}")
             logging.info(f"  Hyp : {hyp_text}")
-            logging.info(f"  Time: {infer_dur*1000:.0f}ms")
+            logging.info(f"  Time: {infer_dur*1000:.0f} ms")
             
             if ref_text:
                 all_refs.append(ref_text)
                 all_hyps.append(hyp_text)
                 
         except Exception as e:
-            logging.error(f"Error processing cut {cut.id}: {e}", exc_info=True)
+            logging.error(f"Error processing {utt_id}: {e}")
             
-    # 3. Final WER Report using jiwer
+    # 4. Final Report
     if all_refs:
         logging.info("-" * 60)
-        logging.info(f"Calculating WER for {len(all_refs)} sentences...")
+        logging.info(f"Calculating Final Metrics for {len(all_refs)} sentences...")
         
+        # Vietnamese text normalization for Jiwer
         transformation = jiwer.Compose([
             jiwer.ToLowerCase(),
             jiwer.RemoveMultipleSpaces(),
@@ -139,8 +145,15 @@ def main():
             hypothesis_transform=transformation
         )
         
+        avg_infer_time = total_time / len(all_refs)
+        rtf = total_time / total_audio_duration
+        
         logging.info(f"Overall WER: {wer:.2%}")
-        logging.info(f"Total Inference Time: {total_time:.2f}s")
+        logging.info(f"Total Audio Duration (inc. padding): {total_audio_duration:.2f} s")
+        logging.info(f"Total Inference Time: {total_time:.2f} s")
+        logging.info(f"Average Inference Time: {avg_infer_time*1000:.0f} ms/utterance")
+        logging.info(f"Real-Time Factor (RTF): {rtf:.4f}")
+        logging.info("-" * 60)
     else:
         logging.warning("No reference text found to compute WER.")
 
