@@ -1,18 +1,23 @@
 import json
 import os
+import argparse
 import soundfile as sf
-from datasets import load_dataset
+from datasets import load_from_disk # Changed import
 
 def main():
-    # 1. Load the Parquet dataset safely
-    print("Downloading and loading the Bud500 test dataset...")
+    # Added argparse so you can run it with a custom path if needed
+    parser = argparse.ArgumentParser(description="Extract Bud500 Test Set to WAV")
+    parser.add_argument("--dataset-path", type=str, default="/home/datasets/viet_bud500", 
+                        help="Local path to the saved Hugging Face dataset")
+    args = parser.parse_args()
+
+    # 1. Load the dataset safely from local disk
+    print(f"Loading the Bud500 dataset from local disk: {args.dataset_path}...")
     
-    # Using data_files with a wildcard guarantees we ONLY touch the test shards.
-    # This prevents any accidental downloading of the massive 100GB training set.
-    dataset = load_dataset(
-        "linhtran92/viet_bud500", 
-        data_files={"test": "data/test-*.parquet"}
-    )
+    # This loads the DatasetDict instantly
+    dataset = load_from_disk(args.dataset_path)
+    
+    # Grab just the test split
     test_data = dataset["test"]
 
     # 2. Setup Output Directory

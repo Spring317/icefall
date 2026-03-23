@@ -11,7 +11,10 @@ from tqdm import tqdm
 import torch
 import torchaudio
 import sentencepiece as spm
-from datasets import load_dataset, Audio
+
+# ADDED: load_from_disk
+from datasets import load_dataset, Audio, load_from_disk 
+
 from lhotse import (
     Recording, RecordingSet, 
     SupervisionSegment, SupervisionSet, 
@@ -32,15 +35,21 @@ def get_args():
     parser.add_argument("--output-dir", type=Path, default="data", help="Root output directory")
     parser.add_argument("--vocab-size", type=int, default=4000, help="Size of BPE vocabulary")
     parser.add_argument("--overwrite", action="store_true", help="Force re-processing even if output exists")
+    
+    # ADDED: Dataset path argument defaulting to your local directory
+    parser.add_argument("--dataset-path", type=str, default="/home/datasets/viet_bud500", 
+                        help="Local path to the saved Hugging Face dataset")
     return parser.parse_args()
 
 def process_dataset_in_memory(args):
     """
-    Downloads data, extracts features in memory, and builds CutSets.
+    Loads local data, extracts features in memory, and builds CutSets.
     Merges Manifest Creation + Feature Extraction into one efficient pass.
     """
-    logging.info("Step 1: Loading Bud500 from Hugging Face...")
-    hf_dataset = load_dataset("linhtran92/viet_bud500", trust_remote_code=True)
+    logging.info(f"Step 1: Loading Bud500 from local disk at {args.dataset_path}...")
+    
+    # CHANGED: Load the pre-processed arrow files instantly from disk
+    hf_dataset = load_from_disk(args.dataset_path)
     
     # Cast to Audio(decode=False) to handle raw bytes/paths manually
     hf_dataset = hf_dataset.cast_column("audio", Audio(decode=False))
@@ -77,7 +86,7 @@ def process_dataset_in_memory(args):
             continue
 
         if split not in hf_dataset:
-            logging.warning(f"Split {split} not found in Hugging Face dataset, skipping.")
+            logging.warning(f"Split {split} not found in local dataset, skipping.")
             continue
             
         logging.info(f"Processing split: {split} -> {icefall_split}")

@@ -1,6 +1,6 @@
-# Vietnamese Streaming ASR Training with pruned_transducer_stateless7_streaming_multi
+# Vietnamese Streaming ASR Training with pruned_transducer_stateless7_streaming
 
-This guide walks you through training a **streaming Zipformer transducer** model for Vietnamese ASR using the `pruned_transducer_stateless7_streaming_multi` recipe.
+This guide walks you through training a **streaming Zipformer transducer** model for Vietnamese ASR using the `pruned_transducer_stateless7_streaming` recipe.
 
 ## Table of Contents
 
@@ -18,28 +18,28 @@ This guide walks you through training a **streaming Zipformer transducer** model
 
 ## Prerequisites
 
-- **Hardware**: At least 1 GPU (recommended: 4× V100/A100 GPUs)
-- **Software**:
-  - Python 3.8+
-  - PyTorch 1.12+ with CUDA
-  - [k2](https://github.com/k2-fsa/k2) installed
-  - [lhotse](https://github.com/lhotse-speech/lhotse) installed
-  - [icefall](https://github.com/k2-fsa/icefall) installed
+
+- Python 3.8 - Python 3.10 
+- CUDA Version: 13.0
+- [k2](https://k2-fsa.github.io/k2/installation/cuda-cudnn.html) installed
+- [lhotse](https://lhotse.readthedocs.io/en/latest/getting-started.html#installation) installed
+- [icefall](https://github.com/k2-fsa/icefall) installed
 
 ## Environment Setup
 
 ```bash
-# 1. Clone icefall and install dependencies
+# Create conda env: 
+conda create -n icefall python==3.10
+conda activate icefall
+
+# Clone icefall and install dependencies
 git clone https://github.com/k2-fsa/icefall.git
 cd icefall
 pip install -r requirements.txt
 
-# 2. Install icefall
-pip install -e .
+# Export icefall to the Conda Env
+source export_icefall.sh 
 
-# 3. Verify k2 and lhotse
-python -c "import k2; print(k2.__version__)"
-python -c "import lhotse; print(lhotse.__version__)"
 ```
 
 ## Data Preparation
@@ -59,11 +59,12 @@ cd egs/librispeech/ASR
 # Create the data directory
 mkdir -p data
 
-# Run the all-in-one data preparation script
-# This will auto-download Bud500 from Hugging Face if not available locally
-python data_prep.py \
-  --output-dir data \
-  --vocab-size 4000
+# Run the data conversion script.
+
+python prepare.py \
+    --dataset-path /home/datasets/viet_bud500 \
+    --output-dir data \
+    --vocab-size 4000
 ```
 
 This produces the following structure:
@@ -79,19 +80,17 @@ data/
 │   └── feats_test/
 └── lang_bpe_4000/
     ├── bpe.model                    # SentencePiece BPE model
-    ├── bpe.vocab                    # BPE vocabulary
-    └── transcripts.txt              # Extracted training transcripts
+    └── bpe.vocab                    # BPE vocabulary
 ```
 
 ### Options
 
 | Argument | Description | Default |
 |----------|-------------|---------|
+|`--dataset-path` | Dataset directory | `viet_bud500`|
 | `--output-dir` | Root output directory | `data` |
 | `--vocab-size` | BPE vocabulary size | `4000` |
 | `--overwrite` | Force re-processing even if outputs exist | `False` |
-
-> **Note**: If you already have the Bud500 dataset cached by Hugging Face `datasets`, it will be loaded from cache without re-downloading. The script also skips splits that have already been processed (use `--overwrite` to force re-processing).
 
 > **Tip**: If you have a local `bpe.model` and `bpe.vocab` in the same directory as `data_prep.py`, the script will copy them directly instead of re-training.
 
@@ -113,7 +112,7 @@ python data_prep.py --output-dir data --vocab-size 2000 --overwrite
 
 ### Step 2: Adapt the training script
 
-The `train.py` in the recipe needs to load Bud500 CutSets instead of LibriSpeech + GigaSpeech. Modify the [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/train.py) `run()` function to load Bud500 cuts directly:
+The `train.py` in the recipe needs to load Bud500 CutSets instead of LibriSpeech + GigaSpeech. Modify the [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) `run()` function to load Bud500 cuts directly:
 
 ```python
 # In train.py run() function, replace the LibriSpeech/GigaSpeech data loading with:
@@ -131,25 +130,13 @@ valid_cuts = CutSet.from_file("data/fbank/bud500_cuts_dev.jsonl.gz")
 #### Single-dataset training (Bud500 Vietnamese)
 
 ```bash
-cd egs/librispeech/ASR
-
-export CUDA_VISIBLE_DEVICES="0,1,2,3"
-
-./pruned_transducer_stateless7_streaming_multi/train.py \
-  --world-size 4 \
-  --num-epochs 30 \
-  --start-epoch 1 \
-  --use-fp16 1 \
-  --exp-dir pruned_transducer_stateless7_streaming_multi/exp \
-  --max-duration 550 \
-  --manifest-dir ./data/fbank \
-  --bpe-model data/lang_bpe_4000/bpe.model \
-  --master-port 12345
+#training flags example:
+ python3 pruned_transducer_stateless7_streaming/train.py --world-size 1 --num-epochs 45 --use-fp16 1 --max-duration 400 --exp-dir pruned_transducer_stateless7_streaming/exp --num-encoder-layers "2,3,3,2,3" --encoder-dims "256,256,256,256,256" --feedforward-dims "768,768,1024,1024,768" --attention-dims "256,256,256,256,256" --encoder-unmasked-dims "256,256,256,256,256" --nhead "4,4,4,4,4" --decoder-dim 512 --joiner-dim 512 --lr-epochs 4.5
 ```
 
 #### Key training arguments
 
-Refer to [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/train.py) for all options. Important ones:
+Refer to [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) for all options. Important ones:
 
 | Argument | Description | Default |
 |----------|-------------|---------|
@@ -167,56 +154,27 @@ Refer to [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming
 | `--enable-musan` | Enable MUSAN noise augmentation | True |
 | `--save-every-n` | Save checkpoint every N batches | 4000 |
 
-#### Smaller model variant (for limited resources)
+All the training input dimension could be freely modified. The table below gives you the insights of what we have trained for difference size of model:
+### Architectural Parameters of Model Variants
 
-For a smaller model (~6.1M params), use:
-
-```bash
-./pruned_transducer_stateless7_streaming_multi/train.py \
-  --world-size 2 \
-  --num-epochs 30 \
-  --start-epoch 1 \
-  --use-fp16 1 \
-  --exp-dir pruned_transducer_stateless7_streaming_multi/exp_small \
-  --max-duration 550 \
-  --manifest-dir ./data/fbank \
-  --bpe-model data/lang_bpe_4000/bpe.model \
-  --num-encoder-layers "2,2,2,2,2" \
-  --feedforward-dims "256,256,512,512,256" \
-  --nhead "4,4,4,4,4" \
-  --encoder-dims "128,128,128,128,128" \
-  --attention-dims "96,96,96,96,96" \
-  --encoder-unmasked-dims "96,96,96,96,96" \
-  --zipformer-downsampling-factors "1,2,4,8,2" \
-  --master-port 12345
-```
-
-#### Resume training
-
-```bash
-# Resume from epoch checkpoint
-./pruned_transducer_stateless7_streaming_multi/train.py \
-  --start-epoch 11 \
-  --exp-dir pruned_transducer_stateless7_streaming_multi/exp \
-  ... (same args as above)
-
-# Resume from batch checkpoint
-./pruned_transducer_stateless7_streaming_multi/train.py \
-  --start-batch 436000 \
-  --exp-dir pruned_transducer_stateless7_streaming_multi/exp \
-  ... (same args as above)
-```
-
+| Parameter | Base | Small | Tiny |
+| :--- | :---: | :---: | :---: |
+| **Params (M)** | 77.10 | 32.24 | 15.36 |
+| **Encoder Dim** | 384 | 256 | 192 |
+| **Encoder Layers** | 2,4,3,2,4 | 2,3,3,2,3 | 2,2,2,2,2 |
+| **FF Dim** | 1024–2048 | 768–1024 | 512 |
+| **Attn. Heads** | 8 | 4 | 4 |
+| **Dec./Joiner Dim** | 512 | 512 | 256 |
 ### Monitoring training
 
 ```bash
 # View tensorboard logs
-tensorboard --logdir pruned_transducer_stateless7_streaming_multi/exp/tensorboard
+tensorboard --logdir pruned_transducer_stateless7_streaming/exp/tensorboard
 ```
 
 ## Decoding
 
-After training, decode with [`decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/decode.py). The script supports these decoding methods from [`beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/beam_search.py):
+After training, decode with [`decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode.py). The script supports these decoding methods from [`beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/beam_search.py):
 
 - `greedy_search` / `greedy_search_batch`
 - `beam_search`
@@ -230,53 +188,27 @@ After training, decode with [`decode.py`](egs/librispeech/ASR/pruned_transducer_
 
 ```bash
 # Greedy search
-./pruned_transducer_stateless7_streaming_multi/decode.py \
+./pruned_transducer_stateless7_streaming/decode.py \
   --epoch 30 \
   --avg 9 \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
   --max-duration 600 \
   --decode-chunk-len 32 \
   --decoding-method greedy_search \
-  --manifest-dir ./data/fbank \
-  --bpe-model data/lang_bpe_4000/bpe.model
-
-# Modified beam search
-./pruned_transducer_stateless7_streaming_multi/decode.py \
-  --epoch 30 \
-  --avg 9 \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
-  --max-duration 600 \
-  --decode-chunk-len 32 \
-  --decoding-method modified_beam_search \
-  --beam-size 4 \
-  --manifest-dir ./data/fbank \
-  --bpe-model data/lang_bpe_4000/bpe.model
-
-# Fast beam search
-./pruned_transducer_stateless7_streaming_multi/decode.py \
-  --epoch 30 \
-  --avg 9 \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
-  --max-duration 600 \
-  --decode-chunk-len 32 \
-  --decoding-method fast_beam_search \
-  --beam 20.0 \
-  --max-contexts 8 \
-  --max-states 64 \
   --manifest-dir ./data/fbank \
   --bpe-model data/lang_bpe_4000/bpe.model
 ```
 
 ### Real chunk-wise streaming decoding
 
-Use [`streaming_decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/streaming_decode.py) for true streaming evaluation:
+Use [`streaming_decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_decode.py) for true streaming evaluation:
 
 ```bash
 for m in greedy_search modified_beam_search fast_beam_search; do
-  ./pruned_transducer_stateless7_streaming_multi/streaming_decode.py \
+  ./pruned_transducer_stateless7_streaming/streaming_decode.py \
     --epoch 30 \
     --avg 9 \
-    --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
     --decoding-method $m \
     --decode-chunk-len 32 \
     --num-decode-streams 2000 \
@@ -285,7 +217,7 @@ for m in greedy_search modified_beam_search fast_beam_search; do
 done
 ```
 
-> **Note**: `decode.py` processes the whole utterance at once with masking (simulated streaming), while `streaming_decode.py` processes frames chunk-by-chunk (real streaming). See [`decode_stream.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/decode_stream.py) and [`streaming_beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/streaming_beam_search.py) for the streaming decoding internals.
+> **Note**: `decode.py` processes the whole utterance at once with masking (simulated streaming), while `streaming_decode.py` processes frames chunk-by-chunk (real streaming). See [`decode_stream.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode_stream.py) and [`streaming_beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_beam_search.py) for the streaming decoding internals.
 
 ### Sweep for best checkpoint
 
@@ -293,10 +225,10 @@ done
 for m in greedy_search fast_beam_search modified_beam_search; do
   for epoch in $(seq 30 -1 20); do
     for avg in $(seq 9 -1 1); do
-      ./pruned_transducer_stateless7_streaming_multi/decode.py \
+      ./pruned_transducer_stateless7_streaming/decode.py \
         --epoch $epoch \
         --avg $avg \
-        --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+        --exp-dir ./pruned_transducer_stateless7_streaming/exp \
         --max-duration 600 \
         --decode-chunk-len 32 \
         --decoding-method $m \
@@ -309,7 +241,7 @@ done
 
 ## Model Export
 
-Use [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/export.py) to export the trained model.
+Use [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export.py) to export the trained model.
 
 ### Export `model.state_dict()`
 
@@ -317,8 +249,8 @@ Use [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_mul
 epoch=30
 avg=9
 
-./pruned_transducer_stateless7_streaming_multi/export.py \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+./pruned_transducer_stateless7_streaming/export.py \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
   --tokens data/lang_bpe_4000/tokens.txt \
   --epoch $epoch \
   --avg $avg
@@ -329,8 +261,8 @@ avg=9
 ### Export as TorchScript (JIT)
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/export.py \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+./pruned_transducer_stateless7_streaming/export.py \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
   --tokens data/lang_bpe_4000/tokens.txt \
   --epoch $epoch \
   --avg $avg \
@@ -341,14 +273,14 @@ avg=9
 
 ### Export via `torch.jit.trace()`
 
-Use [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/jit_trace_export.py):
+Use [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_export.py):
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/jit_trace_export.py \
+./pruned_transducer_stateless7_streaming/jit_trace_export.py \
   --bpe-model data/lang_bpe_4000/bpe.model \
   --use-averaged-model True \
   --decode-chunk-len 32 \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
   --epoch $epoch \
   --avg $avg
 
@@ -360,23 +292,23 @@ Use [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_str
 
 ## Pretrained Inference
 
-Use [`pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/pretrained.py) to transcribe audio files:
+Use [`pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/pretrained.py) to transcribe audio files:
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/pretrained.py \
-  --checkpoint ./pruned_transducer_stateless7_streaming_multi/exp/pretrained.pt \
+./pruned_transducer_stateless7_streaming/pretrained.py \
+  --checkpoint ./pruned_transducer_stateless7_streaming/exp/pretrained.pt \
   --tokens data/lang_bpe_4000/tokens.txt \
   --method greedy_search \
   /path/to/vietnamese_audio.wav
 ```
 
-Use [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/jit_trace_pretrained.py) for torchscript models:
+Use [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_pretrained.py) for torchscript models:
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/jit_trace_pretrained.py \
-  --encoder-model-filename ./pruned_transducer_stateless7_streaming_multi/exp/encoder_jit_trace.pt \
-  --decoder-model-filename ./pruned_transducer_stateless7_streaming_multi/exp/decoder_jit_trace.pt \
-  --joiner-model-filename ./pruned_transducer_stateless7_streaming_multi/exp/joiner_jit_trace.pt \
+./pruned_transducer_stateless7_streaming/jit_trace_pretrained.py \
+  --encoder-model-filename ./pruned_transducer_stateless7_streaming/exp/encoder_jit_trace.pt \
+  --decoder-model-filename ./pruned_transducer_stateless7_streaming/exp/decoder_jit_trace.pt \
+  --joiner-model-filename ./pruned_transducer_stateless7_streaming/exp/joiner_jit_trace.pt \
   --bpe-model ./data/lang_bpe_4000/bpe.model \
   --decode-chunk-len 32 \
   /path/to/vietnamese_audio.wav
@@ -386,16 +318,16 @@ Use [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7
 
 ### Export to ONNX
 
-Use [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/export-onnx.py):
+Use [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-onnx.py):
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/export-onnx.py \
+./pruned_transducer_stateless7_streaming/export-onnx.py \
   --bpe-model data/lang_bpe_4000/bpe.model \
   --use-averaged-model True \
   --epoch $epoch \
   --avg $avg \
   --decode-chunk-len 32 \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp
 
 # This generates:
 #   exp/encoder-epoch-{epoch}-avg-{avg}.onnx
@@ -405,10 +337,10 @@ Use [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streamin
 
 ### Verify ONNX models
 
-Use [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/onnx_check.py):
+Use [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_check.py):
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/onnx_check.py \
+./pruned_transducer_stateless7_streaming/onnx_check.py \
   --bpe-model data/lang_bpe_4000/bpe.model \
   --encoder-model-filename ./exp/encoder-epoch-30-avg-9.onnx \
   --decoder-model-filename ./exp/decoder-epoch-30-avg-9.onnx \
@@ -418,10 +350,10 @@ Use [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming
 
 ### Run ONNX inference
 
-Use [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/onnx_pretrained.py):
+Use [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_pretrained.py):
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/onnx_pretrained.py \
+./pruned_transducer_stateless7_streaming/onnx_pretrained.py \
   --encoder-model-filename ./exp/encoder-epoch-30-avg-9.onnx \
   --decoder-model-filename ./exp/decoder-epoch-30-avg-9.onnx \
   --joiner-model-filename ./exp/joiner-epoch-30-avg-9.onnx \
@@ -431,12 +363,12 @@ Use [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_stre
 
 ### Export to NCNN (for mobile deployment)
 
-Use [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/export-for-ncnn.py):
+Use [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-for-ncnn.py):
 
 ```bash
-./pruned_transducer_stateless7_streaming_multi/export-for-ncnn.py \
+./pruned_transducer_stateless7_streaming/export-for-ncnn.py \
   --tokens data/lang_bpe_4000/tokens.txt \
-  --exp-dir ./pruned_transducer_stateless7_streaming_multi/exp \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
   --use-averaged-model True \
   --epoch $epoch \
   --avg $avg \
@@ -450,12 +382,39 @@ Use [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_stre
   --zipformer-downsampling-factors "1,2,4,8,2"
 ```
 
-Then decode with [`streaming-ncnn-decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/streaming-ncnn-decode.py).
+Then decode with [`streaming-ncnn-decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming-ncnn-decode.py).
 
 ### Deploy with sherpa-onnx
+```bash
+#Install sherpa-onnx framework: 
+pip install sherpa-onnx
 
-For production deployment, use [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) with the exported ONNX models.
+#Generate audio test data and manifest script (In case the dataset does not come with .wav format)
+python3 export_bud500.py
 
+
+#start inference
+python3 inference_sherpa.py \
+  --encoder pruned_transducer_stateless7_streaming_multi/exp/encoder-epoch-30-avg-9.onnx \
+  --decoder pruned_transducer_stateless7_streaming_multi/exp/decoder-epoch-30-avg-9.onnx \
+  --joiner pruned_transducer_stateless7_streaming_multi/exp/joiner-epoch-30-avg-9.onnx \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  --manifest data/fbank/bud500_cuts_test.jsonl.gz \
+  --decoding-method greedy_search \
+  --num-threads 2
+```
+
+
+| Flag | Description | Default / Notes |
+|------|-------------|----------------|
+| `--encoder` | Path to the exported ONNX encoder | Required (from `export-onnx.py`) |
+| `--decoder` | Path to the exported ONNX decoder | Required |
+| `--joiner` | Path to the exported ONNX joiner | Required |
+| `--tokens` | Path to `tokens.txt` produced by the recipe | Required |
+| `--manifest` | JSONL transcript manifest (`id`, `audio_filepath`, `text`) | Required; supports gzipped manifests |
+| `--max-samples` | Limit the number of samples decoded (for quick tests) | `None` (process all) |
+| `--decoding-method` | `greedy_search` or `modified_beam_search` | `greedy_search` |
+| `--num-threads` | Threads used by `sherpa-onnx` | `1`; increase for faster CPU decoding |
 ---
 
 ## Model Architecture Summary
@@ -464,10 +423,10 @@ The model consists of three components (defined in the recipe):
 
 | Component | File | Description |
 |-----------|------|-------------|
-| Encoder | [`zipformer.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/zipformer.py) | Streaming Zipformer with configurable stacks |
-| Decoder | [`decoder.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/decoder.py) | Stateless prediction network (Embedding + Conv1d) |
-| Joiner | [`joiner.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/joiner.py) | Combines encoder and decoder outputs |
-| Full Model | [`model.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/model.py) | Transducer model with pruned RNN-T loss |
+| Encoder | [`zipformer.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/zipformer.py) | Streaming Zipformer with configurable stacks |
+| Decoder | [`decoder.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decoder.py) | Stateless prediction network (Embedding + Conv1d) |
+| Joiner | [`joiner.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/joiner.py) | Combines encoder and decoder outputs |
+| Full Model | [`model.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/model.py) | Transducer model with pruned RNN-T loss |
 
 Default configuration: **~70.37M parameters**
 
@@ -476,23 +435,23 @@ Default configuration: **~70.37M parameters**
 | File | Purpose |
 |------|---------|
 | [`data_prep.py`](egs/librispeech/ASR/data_prep.py) | All-in-one data preparation (download Bud500 + fbank + BPE) |
-| [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/train.py) | Main training script |
-| [`decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/decode.py) | Simulated streaming decoding |
-| [`streaming_decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/streaming_decode.py) | Real chunk-wise streaming decoding |
-| [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/export.py) | Export state_dict / JIT / ONNX |
-| [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/export-onnx.py) | ONNX-specific export |
-| [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/export-for-ncnn.py) | NCNN export for mobile |
-| [`pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/pretrained.py) | Inference with pretrained checkpoint |
-| [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/jit_trace_export.py) | Export via torch.jit.trace |
-| [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/jit_trace_pretrained.py) | Inference with traced models |
-| [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/onnx_pretrained.py) | ONNX inference |
-| [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/onnx_check.py) | Validate ONNX export correctness |
-| [`beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/beam_search.py) | All decoding algorithms |
-| [`streaming_beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/streaming_beam_search.py) | Streaming-specific beam search |
-| [`decode_stream.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/decode_stream.py) | Stream state management for real streaming |
-| [`asr_datamodule.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/asr_datamodule.py) | Data loading and batching |
-| [`scaling.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/scaling.py) | Custom scaling layers |
-| [`optim.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/optim.py) | ScaledAdam and Eden optimizers |
+| [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) | Main training script |
+| [`decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode.py) | Simulated streaming decoding |
+| [`streaming_decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_decode.py) | Real chunk-wise streaming decoding |
+| [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export.py) | Export state_dict / JIT / ONNX |
+| [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-onnx.py) | ONNX-specific export |
+| [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-for-ncnn.py) | NCNN export for mobile |
+| [`pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/pretrained.py) | Inference with pretrained checkpoint |
+| [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_export.py) | Export via torch.jit.trace |
+| [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_pretrained.py) | Inference with traced models |
+| [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_pretrained.py) | ONNX inference |
+| [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_check.py) | Validate ONNX export correctness |
+| [`beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/beam_search.py) | All decoding algorithms |
+| [`streaming_beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_beam_search.py) | Streaming-specific beam search |
+| [`decode_stream.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode_stream.py) | Stream state management for real streaming |
+| [`asr_datamodule.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/asr_datamodule.py) | Data loading and batching |
+| [`scaling.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/scaling.py) | Custom scaling layers |
+| [`optim.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/optim.py) | ScaledAdam and Eden optimizers |
 
 ## Tips
 
@@ -501,5 +460,6 @@ Default configuration: **~70.37M parameters**
 - **Vocab size**: The default is 4000 (unigram). For Vietnamese, experiment with BPE vocab sizes of 2000, 4000, and 8000. Vietnamese has many diacritical marks that increase the effective character set.
 - **Chunk size**: `--decode-chunk-len 32` corresponds to 320ms latency. You can try 16 (160ms) for lower latency or 64 (640ms) for better accuracy.
 - **Speed perturbation**: The data pipeline automatically applies speed perturbation (0.9x, 1.0x, 1.1x) if configured in the cuts.
-- **Multi-dataset**: If you have multiple Vietnamese datasets, follow the pattern in [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming_multi/train.py) which uses `--giga-prob` to mix LibriSpeech with GigaSpeech. Create similar mixing for your datasets.
+- **Multi-dataset**: If you have multiple Vietnamese datasets, follow the pattern in [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) which uses `--giga-prob` to mix LibriSpeech with GigaSpeech. Create similar mixing for your datasets.
 - **Re-running data_prep.py**: The script is idempotent — it skips splits that already have output files. Use `--overwrite` to force re-processing.
+
