@@ -61,7 +61,7 @@ mkdir -p data
 
 # Run the data conversion script.
 
-python prepare.py \
+python data_prep.py \
     --dataset-path /home/datasets/viet_bud500 \
     --output-dir data \
     --vocab-size 4000
