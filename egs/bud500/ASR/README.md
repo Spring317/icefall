@@ -54,7 +54,7 @@ The [`data_prep.py`](egs/librispeech/ASR/data_prep.py) script handles **everythi
 ### Step 1: Create output directory and run data preparation
 
 ```bash
-cd egs/librispeech/ASR
+cd egs/bud500/ASR
 
 # Create the data directory
 mkdir -p data
