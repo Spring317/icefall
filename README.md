@@ -1,389 +1,465 @@
-<div align="center">
-<img src="https://raw.githubusercontent.com/k2-fsa/icefall/master/docs/source/_static/logo.png" width=168>
-</div>
+# Vietnamese Streaming ASR Training with pruned_transducer_stateless7_streaming
 
-# Introduction
+This guide walks you through training a **streaming Zipformer transducer** model for Vietnamese ASR using the `pruned_transducer_stateless7_streaming` recipe.
 
-The icefall project contains speech-related recipes for various datasets
-using [k2-fsa](https://github.com/k2-fsa/k2) and [lhotse](https://github.com/lhotse-speech/lhotse).
+## Table of Contents
 
-You can use [sherpa](https://github.com/k2-fsa/sherpa), [sherpa-ncnn](https://github.com/k2-fsa/sherpa-ncnn) or [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) for deployment with models
-in icefall; these frameworks also support models not included in icefall; please refer to respective documents for more details.
+1. [Prerequisites](#prerequisites)
+2. [Environment Setup](#environment-setup)
+3. [Data Preparation](#data-preparation)
+4. [BPE Model & Feature Extraction](#bpe-model--feature-extraction)
+5. [Training](#training)
+6. [Decoding](#decoding)
+7. [Model Export](#model-export)
+8. [Pretrained Inference](#pretrained-inference)
+9. [ONNX Export & Deployment](#onnx-export--deployment)
 
-You can try pre-trained models from within your browser without the need
-to download or install anything by visiting this [huggingface space](https://huggingface.co/spaces/k2-fsa/automatic-speech-recognition).
-Please refer to [document](https://k2-fsa.github.io/icefall/huggingface/spaces.html) for more details.
+---
 
-# Installation
+## Prerequisites
 
-Please refer to [document](https://k2-fsa.github.io/icefall/installation/index.html)
-for installation.
 
-# Recipes
+- Python 3.8 - Python 3.10 
+- CUDA Version: 13.0
+- [k2](https://k2-fsa.github.io/k2/installation/cuda-cudnn.html) installed
+- [lhotse](https://lhotse.readthedocs.io/en/latest/getting-started.html#installation) installed
+- [icefall](https://github.com/k2-fsa/icefall) installed
 
-Please refer to [document](https://k2-fsa.github.io/icefall/recipes/index.html)
-for more details.
+## Environment Setup
 
-## ASR: Automatic Speech Recognition
+```bash
+# Create conda env: 
+conda create -n icefall python==3.10
+conda activate icefall
 
-### Supported Datasets
-  - [yesno][yesno]
-  
-  - [Aidatatang_200zh][aidatatang_200zh]
-  - [Aishell][aishell]
-  - [Aishell2][aishell2]
-  - [Aishell4][aishell4]
-  - [Alimeeting][alimeeting]
-  - [AMI][ami]
-  - [CommonVoice][commonvoice]
-  - [Corpus of Spontaneous Japanese][csj]
-  - [GigaSpeech][gigaspeech]
-  - [LibriCSS][libricss]
-  - [LibriSpeech][librispeech]
-  - [Libriheavy][libriheavy]
-  - [Multi-Dialect Broadcast News Arabic Speech Recognition][mgb2]
-  - [SPGISpeech][spgispeech]
-  - [Switchboard][swbd]
-  - [TIMIT][timit]
-  - [TED-LIUM3][tedlium3]
-  - [TAL_CSASR][tal_csasr]
-  - [Voxpopuli][voxpopuli]
-  - [XBMU-AMDO31][xbmu-amdo31]
-  - [WenetSpeech][wenetspeech]
-  
-More datasets will be added in the future.
+# Clone icefall and install dependencies
+git clone https://github.com/k2-fsa/icefall.git
+cd icefall
+pip install -r requirements.txt
 
-### Supported Models
-
-The [LibriSpeech][librispeech] recipe supports the most comprehensive set of models, you are welcome to try them out.
-
-#### CTC 
-  - TDNN LSTM CTC
-  - Conformer CTC
-  - Zipformer CTC
-
-#### MMI
-  - Conformer MMI
-  - Zipformer MMI
-
-#### Transducer
-  - Conformer-based Encoder
-  - LSTM-based Encoder
-  - Zipformer-based Encoder
-  - LSTM-based Predictor
-  - [Stateless Predictor](https://research.google/pubs/rnn-transducer-with-stateless-prediction-network/)
-
-#### Whisper
-  - [OpenAi Whisper](https://arxiv.org/abs/2212.04356) (We support fine-tuning on AiShell-1.)
-
-If you are willing to contribute to icefall, please refer to [contributing](https://k2-fsa.github.io/icefall/contributing/index.html) for more details.
-
-We would like to highlight the performance of some of the recipes here.
-
-### [yesno][yesno]
-
-This is the simplest ASR recipe in `icefall` and can be run on CPU.
-Training takes less than 30 seconds and gives you the following WER:
+# Export icefall to the Conda Env
+source export_icefall.sh 
 
 ```
-[test_set] %WER 0.42% [1 / 240, 0 ins, 1 del, 0 sub ]
+
+## Data Preparation
+
+The [`data_prep.py`](egs/librispeech/ASR/data_prep.py) script handles **everything automatically**:
+
+1. Downloads the [Bud500](https://huggingface.co/datasets/linhtran92/viet_bud500) Vietnamese dataset from Hugging Face (if not already cached locally)
+2. Extracts **80-dim log-mel fbank features** in-memory and writes them to disk
+3. Creates Lhotse CutSets for train/dev/test splits
+4. Trains a **SentencePiece BPE model** (unigram, vocab size 4000)
+
+### Step 1: Create output directory and run data preparation
+
+```bash
+cd egs/bud500/ASR
+
+# Create the data directory
+mkdir -p data
+
+# Run the data conversion script.
+
+python prepare.py \
+    --dataset-path /home/datasets/viet_bud500 \
+    --output-dir data \
+    --vocab-size 4000
 ```
-We provide a Colab notebook for this recipe: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1tIjjzaJc3IvGyKiMCDWO-TSnBgkcuN3B?usp=sharing)
 
+This produces the following structure:
+
+```
+data/
+├── fbank/
+│   ├── bud500_cuts_train.jsonl.gz   # Training CutSet with pre-computed features
+│   ├── bud500_cuts_dev.jsonl.gz     # Validation CutSet
+│   ├── bud500_cuts_test.jsonl.gz    # Test CutSet
+│   ├── feats_train/                 # Fbank feature files (LilcomFiles)
+│   ├── feats_dev/
+│   └── feats_test/
+└── lang_bpe_4000/
+    ├── bpe.model                    # SentencePiece BPE model
+    └── bpe.vocab                    # BPE vocabulary
+```
+
+### Options
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+|`--dataset-path` | Dataset directory | `viet_bud500`|
+| `--output-dir` | Root output directory | `data` |
+| `--vocab-size` | BPE vocabulary size | `4000` |
+| `--overwrite` | Force re-processing even if outputs exist | `False` |
+
+> **Tip**: If you have a local `bpe.model` and `bpe.vocab` in the same directory as `data_prep.py`, the script will copy them directly instead of re-training.
+
+## BPE Model & Feature Extraction
+
+> **Both are already handled by `data_prep.py`** in the previous step. No separate action needed.
+
+- **BPE model**: A unigram SentencePiece model (vocab size 4000) is saved to `data/lang_bpe_4000/bpe.model`
+- **Fbank features**: 80-dim log-mel filterbank features are extracted in-memory and stored as LilcomFiles under `data/fbank/`
+
+If you want to re-train the BPE model with a different vocab size:
+
+```bash
+python data_prep.py --output-dir data --vocab-size 2000 --overwrite
+# This will create data/lang_bpe_2000/ with the new BPE model
+```
+
+## Training
+
+### Step 2: Adapt the training script
+
+The `train.py` in the recipe needs to load Bud500 CutSets instead of LibriSpeech + GigaSpeech. Modify the [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) `run()` function to load Bud500 cuts directly:
+
+```python
+# In train.py run() function, replace the LibriSpeech/GigaSpeech data loading with:
+from lhotse import CutSet
+
+# Load Bud500 cuts (already have pre-computed fbank features from data_prep.py)
+train_cuts = CutSet.from_file("data/fbank/bud500_cuts_train.jsonl.gz")
+valid_cuts = CutSet.from_file("data/fbank/bud500_cuts_dev.jsonl.gz")
+```
+
+> **Reference**: See how [`pruned_transducer_stateless7_streaming/train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) already loads Bud500 cuts for an example of this pattern.
+
+### Step 3: Run training
+
+#### Single-dataset training (Bud500 Vietnamese)
+
+```bash
+#training flags example:
+ python3 pruned_transducer_stateless7_streaming/train.py --world-size 1 --num-epochs 45 --use-fp16 1 --max-duration 400 --exp-dir pruned_transducer_stateless7_streaming/exp --num-encoder-layers "2,3,3,2,3" --encoder-dims "256,256,256,256,256" --feedforward-dims "768,768,1024,1024,768" --attention-dims "256,256,256,256,256" --encoder-unmasked-dims "256,256,256,256,256" --nhead "4,4,4,4,4" --decoder-dim 512 --joiner-dim 512 --lr-epochs 4.5
+```
+
+#### Key training arguments
+
+Refer to [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) for all options. Important ones:
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--world-size` | Number of GPUs for DDP training | 1 |
+| `--num-epochs` | Total training epochs | 30 |
+| `--start-epoch` | Resume from this epoch | 1 |
+| `--use-fp16` | Mixed precision training (recommended) | 0 |
+| `--exp-dir` | Directory for checkpoints and logs | — |
+| `--max-duration` | Max audio duration (seconds) per batch | 300 |
+| `--manifest-dir` | Directory with cut manifests | `data/fbank` |
+| `--bpe-model` | Path to BPE model | — |
+| `--num-encoder-layers` | Encoder layer config per stack | `"2,4,3,2,4"` |
+| `--feedforward-dims` | FFN dims per stack | `"1024,1024,2048,2048,1024"` |
+| `--encoder-dims` | Encoder dims per stack | `"384,384,384,384,384"` |
+| `--enable-musan` | Enable MUSAN noise augmentation | True |
+| `--save-every-n` | Save checkpoint every N batches | 4000 |
+
+All the training input dimension could be freely modified. The table below gives you the insights of what we have trained for difference size of model:
+### Architectural Parameters of Model Variants
+
+| Parameter | Base | Small | Tiny |
+| :--- | :---: | :---: | :---: |
+| **Params (M)** | 77.10 | 32.24 | 15.36 |
+| **Encoder Dim** | 384 | 256 | 192 |
+| **Encoder Layers** | 2,4,3,2,4 | 2,3,3,2,3 | 2,2,2,2,2 |
+| **FF Dim** | 1024–2048 | 768–1024 | 512 |
+| **Attn. Heads** | 8 | 4 | 4 |
+| **Dec./Joiner Dim** | 512 | 512 | 256 |
+### Monitoring training
+
+```bash
+# View tensorboard logs
+tensorboard --logdir pruned_transducer_stateless7_streaming/exp/tensorboard
+```
+
+## Decoding
+
+After training, decode with [`decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode.py). The script supports these decoding methods from [`beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/beam_search.py):
+
+- `greedy_search` / `greedy_search_batch`
+- `beam_search`
+- `modified_beam_search`
+- `fast_beam_search_one_best`
+- `fast_beam_search_nbest`
+- `fast_beam_search_nbest_oracle`
+- `fast_beam_search_nbest_LG`
+
+### Simulated streaming decoding
+
+```bash
+# Greedy search
+./pruned_transducer_stateless7_streaming/decode.py \
+  --epoch 30 \
+  --avg 9 \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+  --max-duration 600 \
+  --decode-chunk-len 32 \
+  --decoding-method greedy_search \
+  --manifest-dir ./data/fbank \
+  --bpe-model data/lang_bpe_4000/bpe.model
+```
+
+### Real chunk-wise streaming decoding
+
+Use [`streaming_decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_decode.py) for true streaming evaluation:
+
+```bash
+for m in greedy_search modified_beam_search fast_beam_search; do
+  ./pruned_transducer_stateless7_streaming/streaming_decode.py \
+    --epoch 30 \
+    --avg 9 \
+    --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+    --decoding-method $m \
+    --decode-chunk-len 32 \
+    --num-decode-streams 2000 \
+    --manifest-dir ./data/fbank \
+    --bpe-model data/lang_bpe_4000/bpe.model
+done
+```
+
+> **Note**: `decode.py` processes the whole utterance at once with masking (simulated streaming), while `streaming_decode.py` processes frames chunk-by-chunk (real streaming). See [`decode_stream.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode_stream.py) and [`streaming_beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_beam_search.py) for the streaming decoding internals.
+
+### Sweep for best checkpoint
+
+```bash
+for m in greedy_search fast_beam_search modified_beam_search; do
+  for epoch in $(seq 30 -1 20); do
+    for avg in $(seq 9 -1 1); do
+      ./pruned_transducer_stateless7_streaming/decode.py \
+        --epoch $epoch \
+        --avg $avg \
+        --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+        --max-duration 600 \
+        --decode-chunk-len 32 \
+        --decoding-method $m \
+        --manifest-dir ./data/fbank \
+        --bpe-model data/lang_bpe_4000/bpe.model
+    done
+  done
+done
+```
+
+## Model Export
+
+Use [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export.py) to export the trained model.
+
+### Export `model.state_dict()`
+
+```bash
+epoch=30
+avg=9
+
+./pruned_transducer_stateless7_streaming/export.py \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  --epoch $epoch \
+  --avg $avg
+
+# This generates: exp/pretrained.pt
+```
+
+### Export as TorchScript (JIT)
+
+```bash
+./pruned_transducer_stateless7_streaming/export.py \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  --epoch $epoch \
+  --avg $avg \
+  --jit 1
+
+# This generates: exp/cpu_jit.pt
+```
+
+### Export via `torch.jit.trace()`
+
+Use [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_export.py):
+
+```bash
+./pruned_transducer_stateless7_streaming/jit_trace_export.py \
+  --bpe-model data/lang_bpe_4000/bpe.model \
+  --use-averaged-model True \
+  --decode-chunk-len 32 \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+  --epoch $epoch \
+  --avg $avg
+
+# This generates:
+#   exp/encoder_jit_trace.pt
+#   exp/decoder_jit_trace.pt
+#   exp/joiner_jit_trace.pt
+```
+
+## Pretrained Inference
+
+Use [`pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/pretrained.py) to transcribe audio files:
+
+```bash
+./pruned_transducer_stateless7_streaming/pretrained.py \
+  --checkpoint ./pruned_transducer_stateless7_streaming/exp/pretrained.pt \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  --method greedy_search \
+  /path/to/vietnamese_audio.wav
+```
+
+Use [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_pretrained.py) for torchscript models:
+
+```bash
+./pruned_transducer_stateless7_streaming/jit_trace_pretrained.py \
+  --encoder-model-filename ./pruned_transducer_stateless7_streaming/exp/encoder_jit_trace.pt \
+  --decoder-model-filename ./pruned_transducer_stateless7_streaming/exp/decoder_jit_trace.pt \
+  --joiner-model-filename ./pruned_transducer_stateless7_streaming/exp/joiner_jit_trace.pt \
+  --bpe-model ./data/lang_bpe_4000/bpe.model \
+  --decode-chunk-len 32 \
+  /path/to/vietnamese_audio.wav
+```
+
+## ONNX Export & Deployment
+
+### Export to ONNX
+
+Use [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-onnx.py):
+
+```bash
+./pruned_transducer_stateless7_streaming/export-onnx.py \
+  --bpe-model data/lang_bpe_4000/bpe.model \
+  --use-averaged-model True \
+  --epoch $epoch \
+  --avg $avg \
+  --decode-chunk-len 32 \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp
+
+# This generates:
+#   exp/encoder-epoch-{epoch}-avg-{avg}.onnx
+#   exp/decoder-epoch-{epoch}-avg-{avg}.onnx
+#   exp/joiner-epoch-{epoch}-avg-{avg}.onnx
+```
+
+### Verify ONNX models
+
+Use [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_check.py):
+
+```bash
+./pruned_transducer_stateless7_streaming/onnx_check.py \
+  --bpe-model data/lang_bpe_4000/bpe.model \
+  --encoder-model-filename ./exp/encoder-epoch-30-avg-9.onnx \
+  --decoder-model-filename ./exp/decoder-epoch-30-avg-9.onnx \
+  --joiner-model-filename ./exp/joiner-epoch-30-avg-9.onnx \
+  --jit-filename ./exp/encoder_jit_trace.pt
+```
+
+### Run ONNX inference
+
+Use [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_pretrained.py):
+
+```bash
+./pruned_transducer_stateless7_streaming/onnx_pretrained.py \
+  --encoder-model-filename ./exp/encoder-epoch-30-avg-9.onnx \
+  --decoder-model-filename ./exp/decoder-epoch-30-avg-9.onnx \
+  --joiner-model-filename ./exp/joiner-epoch-30-avg-9.onnx \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  /path/to/vietnamese_audio.wav
+```
+
+### Export to NCNN (for mobile deployment)
+
+Use [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-for-ncnn.py):
+
+```bash
+./pruned_transducer_stateless7_streaming/export-for-ncnn.py \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  --exp-dir ./pruned_transducer_stateless7_streaming/exp \
+  --use-averaged-model True \
+  --epoch $epoch \
+  --avg $avg \
+  --decode-chunk-len 32 \
+  --num-encoder-layers "2,4,3,2,4" \
+  --feedforward-dims "1024,1024,2048,2048,1024" \
+  --nhead "8,8,8,8,8" \
+  --encoder-dims "384,384,384,384,384" \
+  --attention-dims "192,192,192,192,192" \
+  --encoder-unmasked-dims "256,256,256,256,256" \
+  --zipformer-downsampling-factors "1,2,4,8,2"
+```
+
+Then decode with [`streaming-ncnn-decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming-ncnn-decode.py).
+
+### Deploy with sherpa-onnx
+```bash
+#Install sherpa-onnx framework: 
+pip install sherpa-onnx
+
+#Generate audio test data and manifest script (In case the dataset does not come with .wav format)
+python3 export_bud500.py
+
+
+#start inference
+python3 inference_sherpa.py \
+  --encoder pruned_transducer_stateless7_streaming_multi/exp/encoder-epoch-30-avg-9.onnx \
+  --decoder pruned_transducer_stateless7_streaming_multi/exp/decoder-epoch-30-avg-9.onnx \
+  --joiner pruned_transducer_stateless7_streaming_multi/exp/joiner-epoch-30-avg-9.onnx \
+  --tokens data/lang_bpe_4000/tokens.txt \
+  --manifest data/fbank/bud500_cuts_test.jsonl.gz \
+  --decoding-method greedy_search \
+  --num-threads 2
+```
+
+
+| Flag | Description | Default / Notes |
+|------|-------------|----------------|
+| `--encoder` | Path to the exported ONNX encoder | Required (from `export-onnx.py`) |
+| `--decoder` | Path to the exported ONNX decoder | Required |
+| `--joiner` | Path to the exported ONNX joiner | Required |
+| `--tokens` | Path to `tokens.txt` produced by the recipe | Required |
+| `--manifest` | JSONL transcript manifest (`id`, `audio_filepath`, `text`) | Required; supports gzipped manifests |
+| `--max-samples` | Limit the number of samples decoded (for quick tests) | `None` (process all) |
+| `--decoding-method` | `greedy_search` or `modified_beam_search` | `greedy_search` |
+| `--num-threads` | Threads used by `sherpa-onnx` | `1`; increase for faster CPU decoding |
+---
+
+## Model Architecture Summary
+
+The model consists of three components (defined in the recipe):
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Encoder | [`zipformer.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/zipformer.py) | Streaming Zipformer with configurable stacks |
+| Decoder | [`decoder.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decoder.py) | Stateless prediction network (Embedding + Conv1d) |
+| Joiner | [`joiner.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/joiner.py) | Combines encoder and decoder outputs |
+| Full Model | [`model.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/model.py) | Transducer model with pruned RNN-T loss |
+
+Default configuration: **~70.37M parameters**
+
+## File Reference
+
+| File | Purpose |
+|------|---------|
+| [`data_prep.py`](egs/librispeech/ASR/data_prep.py) | All-in-one data preparation (download Bud500 + fbank + BPE) |
+| [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) | Main training script |
+| [`decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode.py) | Simulated streaming decoding |
+| [`streaming_decode.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_decode.py) | Real chunk-wise streaming decoding |
+| [`export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export.py) | Export state_dict / JIT / ONNX |
+| [`export-onnx.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-onnx.py) | ONNX-specific export |
+| [`export-for-ncnn.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/export-for-ncnn.py) | NCNN export for mobile |
+| [`pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/pretrained.py) | Inference with pretrained checkpoint |
+| [`jit_trace_export.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_export.py) | Export via torch.jit.trace |
+| [`jit_trace_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/jit_trace_pretrained.py) | Inference with traced models |
+| [`onnx_pretrained.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_pretrained.py) | ONNX inference |
+| [`onnx_check.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/onnx_check.py) | Validate ONNX export correctness |
+| [`beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/beam_search.py) | All decoding algorithms |
+| [`streaming_beam_search.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/streaming_beam_search.py) | Streaming-specific beam search |
+| [`decode_stream.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/decode_stream.py) | Stream state management for real streaming |
+| [`asr_datamodule.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/asr_datamodule.py) | Data loading and batching |
+| [`scaling.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/scaling.py) | Custom scaling layers |
+| [`optim.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/optim.py) | ScaledAdam and Eden optimizers |
+
+## Tips
+
+- **Bud500 dataset**: The [Bud500](https://huggingface.co/datasets/linhtran92/viet_bud500) dataset is ~500 hours of Vietnamese speech. It is automatically downloaded from Hugging Face by `data_prep.py` and cached locally by the `datasets` library.
+- **Vietnamese text normalization**: Ensure consistent Unicode normalization (NFC) for all Vietnamese text. The Bud500 transcripts are already normalized.
+- **Vocab size**: The default is 4000 (unigram). For Vietnamese, experiment with BPE vocab sizes of 2000, 4000, and 8000. Vietnamese has many diacritical marks that increase the effective character set.
+- **Chunk size**: `--decode-chunk-len 32` corresponds to 320ms latency. You can try 16 (160ms) for lower latency or 64 (640ms) for better accuracy.
+- **Speed perturbation**: The data pipeline automatically applies speed perturbation (0.9x, 1.0x, 1.1x) if configured in the cuts.
+- **Multi-dataset**: If you have multiple Vietnamese datasets, follow the pattern in [`train.py`](egs/librispeech/ASR/pruned_transducer_stateless7_streaming/train.py) which uses `--giga-prob` to mix LibriSpeech with GigaSpeech. Create similar mixing for your datasets.
+- **Re-running data_prep.py**: The script is idempotent — it skips splits that already have output files. Use `--overwrite` to force re-processing.
 
-### [LibriSpeech][librispeech]
-
-Please see [RESULTS.md](https://github.com/k2-fsa/icefall/blob/master/egs/librispeech/ASR/RESULTS.md)
-for the **latest** results.
-
-#### [Conformer CTC](https://github.com/k2-fsa/icefall/tree/master/egs/librispeech/ASR/conformer_ctc)
-
-|     | test-clean | test-other |
-|-----|------------|------------|
-| WER | 2.42       | 5.73       |
-
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1huyupXAcHsUrKaWfI83iMEJ6J0Nh0213?usp=sharing)
-
-#### [TDNN LSTM CTC](https://github.com/k2-fsa/icefall/tree/master/egs/librispeech/ASR/tdnn_lstm_ctc)
-
-|     | test-clean | test-other |
-|-----|------------|------------|
-| WER | 6.59       | 17.69      |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1-iSfQMp2So-We_Uu49N4AAcMInB72u9z?usp=sharing)
-
-
-#### [Transducer (Conformer Encoder + LSTM Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/librispeech/ASR/transducer)
-
-|               | test-clean | test-other |
-|---------------|------------|------------|
-| greedy_search | 3.07       | 7.51       |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1_u6yK9jDkPwG_NLrZMN2XK7Aeq4suMO2?usp=sharing)
-
-#### [Transducer (Conformer Encoder + Stateless Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/librispeech/ASR/transducer)
-
-|                                       | test-clean | test-other |
-|---------------------------------------|------------|------------|
-| modified_beam_search (`beam_size=4`) | 2.56       | 6.27       |
-
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1CO1bXJ-2khDckZIW8zjOPHGSKLHpTDlp?usp=sharing)
-
-
-#### [Transducer (Zipformer Encoder + Stateless Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/librispeech/ASR/zipformer)
-
-WER (modified_beam_search `beam_size=4` unless further stated) 
-
-1. LibriSpeech-960hr
-
-| Encoder         | Params | test-clean | test-other | epochs  | devices    |
-|-----------------|--------|------------|------------|---------|------------|
-| Zipformer       | 65.5M  | 2.21       | 4.79       | 50      | 4 32G-V100 |
-| Zipformer-small | 23.2M  | 2.42       | 5.73       | 50      | 2 32G-V100 |
-| Zipformer-large | 148.4M | 2.06       | 4.63       | 50      | 4 32G-V100 |
-| Zipformer-large | 148.4M | 2.00       | 4.38       | 174     | 8 80G-A100 |
-
-2. LibriSpeech-960hr + GigaSpeech
-
-| Encoder         | Params | test-clean | test-other |
-|-----------------|--------|------------|------------|
-| Zipformer       | 65.5M   | 1.78       | 4.08       |
-
-
-3. LibriSpeech-960hr + GigaSpeech + CommonVoice
-
-| Encoder         | Params | test-clean | test-other |
-|-----------------|--------|------------|------------|
-| Zipformer       | 65.5M   | 1.90       | 3.98       |
-
-
-### [GigaSpeech][gigaspeech]
-
-#### [Conformer CTC](https://github.com/k2-fsa/icefall/tree/master/egs/gigaspeech/ASR/conformer_ctc)
-
-|     |  Dev  | Test  |
-|-----|-------|-------|
-| WER | 10.47 | 10.58 |
-
-#### [Transducer (pruned_transducer_stateless2)](https://github.com/k2-fsa/icefall/tree/master/egs/gigaspeech/ASR/pruned_transducer_stateless2)
-
-Conformer Encoder + Stateless Predictor + k2 Pruned RNN-T Loss
-
-|                      |  Dev  | Test  |
-|----------------------|-------|-------|
-|    greedy_search     | 10.51 | 10.73 |
-|   fast_beam_search   | 10.50 | 10.69 |
-| modified_beam_search | 10.40 | 10.51 |
-
-#### [Transducer (Zipformer Encoder + Stateless Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/gigaspeech/ASR/zipformer)
-
-|                      |  Dev  | Test  |
-|----------------------|-------|-------|
-|    greedy_search     | 10.31 | 10.50 |
-|   fast_beam_search   | 10.26 | 10.48 |
-| modified_beam_search | 10.25 | 10.38 |
-
-
-### [Aishell][aishell]
-
-#### [TDNN LSTM CTC](https://github.com/k2-fsa/icefall/tree/master/egs/aishell/ASR/tdnn_lstm_ctc)
-
-|     | test  |
-|-----|-------|
-| CER | 10.16 |
-
-We provide a Colab notebook to test the pre-trained model:  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1jbyzYq3ytm6j2nlEt-diQm-6QVWyDDEa?usp=sharing)
-
-#### [Transducer (Conformer Encoder + Stateless Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/aishell/ASR/transducer_stateless)
-
-|     | test |
-|-----|------|
-| CER | 4.38 |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/14XaT2MhnBkK-3_RqqWq3K90Xlbin-GZC?usp=sharing)
-
-#### [Transducer (Zipformer Encoder + Stateless Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/aishell/ASR/zipformer)
-
-WER (modified_beam_search `beam_size=4`) 
-
-| Encoder         | Params | dev | test | epochs  |
-|-----------------|--------|-----|------|---------|
-| Zipformer       | 73.4M  | 4.13| 4.40 | 55      |
-| Zipformer-small | 30.2M  | 4.40| 4.67 | 55      |
-| Zipformer-large | 157.3M | 4.03| 4.28 | 56      |
-
-
-### [Aishell4][aishell4]
-
-#### [Transducer (pruned_transducer_stateless5)](https://github.com/k2-fsa/icefall/tree/master/egs/aishell4/ASR/pruned_transducer_stateless5)
-
-1 Trained with all subsets: 
-|     |   test     |
-|-----|------------|
-| CER |   29.08    |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1z3lkURVv9M7uTiIgf3Np9IntMHEknaks?usp=sharing)
-
-
-### [TIMIT][timit]
-
-#### [TDNN LSTM CTC](https://github.com/k2-fsa/icefall/tree/master/egs/timit/ASR/tdnn_lstm_ctc)
-
-|   |TEST|
-|---|----|
-|PER| 19.71% |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Hs9DA4V96uapw_30uNp32OMJgkuR5VVd?usp=sharing)
-
-#### [TDNN LiGRU CTC](https://github.com/k2-fsa/icefall/tree/master/egs/timit/ASR/tdnn_ligru_ctc)
-
-|   |TEST|
-|---|----|
-|PER| 17.66% |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1z3lkURVv9M7uTiIgf3Np9IntMHEknaks?usp=sharing)
-
-
-### [TED-LIUM3][tedlium3]
-
-#### [Transducer (Conformer Encoder + Stateless Predictor)](https://github.com/k2-fsa/icefall/tree/master/egs/tedlium3/ASR/transducer_stateless)
-
-|                                      |  dev  |  test  |
-|--------------------------------------|-------|--------|
-| modified_beam_search (`beam_size=4`) |  6.91 |  6.33  |
-
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1MmY5bBxwvKLNT4A2DJnwiqRXhdchUqPN?usp=sharing)
-
-#### [Transducer (pruned_transducer_stateless)](https://github.com/k2-fsa/icefall/tree/master/egs/tedlium3/ASR/pruned_transducer_stateless)
-
-|                                      |  dev  |  test  |
-|--------------------------------------|-------|--------|
-| modified_beam_search (`beam_size=4`) |  6.77 |  6.14  |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1je_1zGrOkGVVd4WLzgkXRHxl-I27yWtz?usp=sharing)
-
-
-### [Aidatatang_200zh][aidatatang_200zh]
-
-#### [Transducer (pruned_transducer_stateless2)](https://github.com/k2-fsa/icefall/tree/master/egs/aidatatang_200zh/ASR/pruned_transducer_stateless2)
-
-|                      |  Dev  | Test  |
-|----------------------|-------|-------|
-|    greedy_search     | 5.53  | 6.59  |
-|   fast_beam_search   | 5.30  | 6.34  |
-| modified_beam_search | 5.27  | 6.33  |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1wNSnSj3T5oOctbh5IGCa393gKOoQw2GH?usp=sharing)
-
-
-### [WenetSpeech][wenetspeech]
-
-#### [Transducer (pruned_transducer_stateless2)](https://github.com/k2-fsa/icefall/tree/master/egs/wenetspeech/ASR/pruned_transducer_stateless2)
-
-|                      |  Dev  | Test-Net | Test-Meeting |
-|----------------------|-------|----------|--------------|
-|    greedy_search     | 7.80  |  8.75    |  13.49       |
-|   fast_beam_search   | 7.94  |  8.74    |  13.80       |
-| modified_beam_search | 7.76  |  8.71    |  13.41       |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1EV4e1CHa1GZgEF-bZgizqI9RyFFehIiN?usp=sharing)
-
-#### [Transducer **Streaming** (pruned_transducer_stateless5) ](https://github.com/k2-fsa/icefall/tree/master/egs/wenetspeech/ASR/pruned_transducer_stateless5)
-
-|                      |  Dev  | Test-Net | Test-Meeting |
-|----------------------|-------|----------|--------------|
-| greedy_search | 8.78 | 10.12 | 16.16 |
-| fast_beam_search| 9.01 | 10.47 | 16.28 |
-| modified_beam_search | 8.53| 9.95 | 15.81 |
-
-
-### [Alimeeting][alimeeting]
-
-#### [Transducer (pruned_transducer_stateless2)](https://github.com/k2-fsa/icefall/tree/master/egs/alimeeting/ASR/pruned_transducer_stateless2)
-
-|                      |  Eval  | Test-Net |
-|----------------------|--------|----------|
-|    greedy_search     | 31.77  |  34.66   |
-|   fast_beam_search   | 31.39  |  33.02   |
-| modified_beam_search | 30.38  |  34.25   |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1tKr3f0mL17uO_ljdHGKtR7HOmthYHwJG?usp=sharing)
-
-
-### [TAL_CSASR][tal_csasr]
-
-
-#### [Transducer (pruned_transducer_stateless5)](https://github.com/k2-fsa/icefall/tree/master/egs/tal_csasr/ASR/pruned_transducer_stateless5)
-
-The best results for Chinese CER(%) and English WER(%) respectively (zh: Chinese, en: English):
-|decoding-method | dev | dev_zh | dev_en | test | test_zh | test_en |
-|--|--|--|--|--|--|--|
-|greedy_search| 7.30 | 6.48 | 19.19 |7.39| 6.66 | 19.13|
-|fast_beam_search| 7.18 | 6.39| 18.90 |  7.27| 6.55 | 18.77|
-|modified_beam_search| 7.15 | 6.35 | 18.95 | 7.22| 6.50 | 18.70 |
-
-We provide a Colab notebook to test the pre-trained model: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1DmIx-NloI1CMU5GdZrlse7TRu4y3Dpf8?usp=sharing)
-
-## TTS: Text-to-Speech
-
-### Supported Datasets
-
-  - [LJSpeech][ljspeech]
-  - [VCTK][vctk]
-  - [LibriTTS][libritts_tts]
-
-### Supported Models
-
-  - [VITS](https://arxiv.org/abs/2106.06103)
-
-# Deployment with C++
-
-Once you have trained a model in icefall, you may want to deploy it with C++ without Python dependencies.
-
-Please refer to
-
-  - https://k2-fsa.github.io/icefall/model-export/export-with-torch-jit-script.html
-  - https://k2-fsa.github.io/icefall/model-export/export-onnx.html
-  - https://k2-fsa.github.io/icefall/model-export/export-ncnn.html
-
-for how to do this.
-
-We also provide a Colab notebook, showing you how to run a torch scripted model in [k2][k2] with C++.
-Please see: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1BIGLWzS36isskMXHKcqC9ysN6pspYXs_?usp=sharing)
-
-
-[yesno]: egs/yesno/ASR
-[librispeech]: egs/librispeech/ASR
-[aishell]: egs/aishell/ASR
-[aishell2]: egs/aishell2/ASR
-[aishell4]: egs/aishell4/ASR
-[timit]: egs/timit/ASR
-[tedlium3]: egs/tedlium3/ASR
-[gigaspeech]: egs/gigaspeech/ASR
-[aidatatang_200zh]: egs/aidatatang_200zh/ASR
-[wenetspeech]: egs/wenetspeech/ASR
-[alimeeting]: egs/alimeeting/ASR
-[tal_csasr]: egs/tal_csasr/ASR
-[ami]: egs/ami
-[swbd]: egs/swbd/ASR
-[k2]: https://github.com/k2-fsa/k2
-[commonvoice]: egs/commonvoice/ASR
-[csj]: egs/csj/ASR
-[libricss]: egs/libricss/SURT
-[libritts_asr]: egs/libritts/ASR
-[libriheavy]: egs/libriheavy/ASR
-[mgb2]: egs/mgb2/ASR
-[spgispeech]: egs/spgispeech/ASR
-[voxpopuli]: egs/voxpopuli/ASR
-[xbmu-amdo31]: egs/xbmu-amdo31/ASR
-
-[vctk]: egs/vctk/TTS
-[ljspeech]: egs/ljspeech/TTS
-[libritts_tts]: egs/libritts/TTS
-
-## Acknowledgements
-
-Some contributors to this project were supported by Xiaomi Corporation. Others were supported by National Science Foundation CCRI award 2120435.  This is not an exhaustive list of sources of support.
