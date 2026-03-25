@@ -1,1 +1,0 @@
-../../ST/zipformer/pretrained.py

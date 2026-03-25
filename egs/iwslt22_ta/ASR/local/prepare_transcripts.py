@@ -1,1 +1,0 @@
-/exp/ahussein/tmp/icefall/egs/iwslt22_ta/ST/local/prepare_transcripts.py

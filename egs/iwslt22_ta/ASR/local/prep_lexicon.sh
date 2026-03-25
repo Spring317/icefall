@@ -1,1 +1,0 @@
-../../ST/local/prep_lexicon.sh
